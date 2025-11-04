@@ -1,0 +1,286 @@
+package quoteapp;
+
+public class Quote {
+    private String text;
+    private String author;
+
+    public Quote(String text, String author) {
+        this.text = text == null ? "" : text.trim();
+        this.author = author == null ? "Unknown" : author.trim();
+    }
+
+    // Encapsulation: getters/setters
+    public String getText() { return text; }
+    public void setText(String text) { this.text = text == null ? "" : text.trim(); }
+
+    public String getAuthor() { return author; }
+    public void setAuthor(String author) { this.author = author == null ? "Unknown" : author.trim(); }
+
+    @Override
+    public String toString() {
+        return "\"" + text + "\" — " + author;
+    }
+}
+
+package quoteapp;
+
+import java.util.List;
+
+public interface QuoteProvider {
+    List<Quote> loadQuotes() throws Exception;
+    void saveQuotes(List<Quote> quotes) throws Exception;
+}
+
+package quoteapp;
+
+import java.nio.file.*;
+import java.util.*;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+
+public class FileQuoteProvider implements QuoteProvider {
+    private final Path filePath;
+
+    public FileQuoteProvider(String fileName) {
+        this.filePath = Paths.get(fileName);
+    }
+
+    @Override
+    public List<Quote> loadQuotes() throws IOException {
+        if (!Files.exists(filePath)) {
+            // create with some defaults
+            List<String> defaults = Arrays.asList(
+                "The only way to do great work is to love what you do. — Steve Jobs",
+                "Life is what happens when you're busy making other plans. — John Lennon",
+                "The best time to plant a tree was 20 years ago. The second best time is now. — Chinese Proverb",
+                "You miss 100% of the shots you don't take. — Wayne Gretzky",
+                "Strive not to be a success, but rather to be of value. — Albert Einstein"
+            );
+            Files.write(filePath, defaults, StandardCharsets.UTF_8);
+        }
+
+        List<String> lines = Files.readAllLines(filePath, StandardCharsets.UTF_8);
+        List<Quote> quotes = new ArrayList<>();
+        for (String line : lines) {
+            if (line == null || line.trim().isEmpty()) continue;
+            // expecting format: text — author (em dash or hyphen)
+            String[] parts = line.split("—");
+            if (parts.length >= 2) {
+                quotes.add(new Quote(parts[0].trim().replaceAll("^\"|\"$", ""), parts[1].trim()));
+            } else {
+                // fallback: entire line is text
+                quotes.add(new Quote(line.trim(), "Unknown"));
+            }
+        }
+        return quotes;
+    }
+
+    @Override
+    public void saveQuotes(List<Quote> quotes) throws IOException {
+        List<String> lines = new ArrayList<>();
+        for (Quote q : quotes) {
+            // store as: Quote text — Author
+            lines.add(q.getText() + " — " + q.getAuthor());
+        }
+        Files.write(filePath, lines, StandardCharsets.UTF_8);
+    }
+}
+
+package quoteapp;
+
+import java.time.LocalDate;
+import java.util.*;
+
+public class QuoteService {
+    private QuoteProvider provider;
+    private List<Quote> quotes;
+
+    public QuoteService(QuoteProvider provider) {
+        this.provider = provider;
+        load();
+    }
+
+    private void load() {
+        try {
+            this.quotes = provider.loadQuotes();
+            if (this.quotes == null) this.quotes = new ArrayList<>();
+        } catch (Exception e) {
+            e.printStackTrace();
+            this.quotes = new ArrayList<>();
+        }
+    }
+
+    public Quote getDailyQuote(LocalDate date) {
+        if (quotes.isEmpty()) {
+            return new Quote("No quotes available.", "System");
+        }
+        long epochDay = date.toEpochDay(); // deterministic across runs
+        int idx = Math.abs((int)(epochDay % quotes.size()));
+        return quotes.get(idx);
+    }
+
+    public List<Quote> getAllQuotes() { return Collections.unmodifiableList(quotes); }
+
+    public boolean addQuote(Quote q) {
+        if (q == null || q.getText().isBlank()) return false;
+        quotes.add(q);
+        return save();
+    }
+
+    public boolean removeQuote(int index) {
+        if (index < 0 || index >= quotes.size()) return false;
+        quotes.remove(index);
+        return save();
+    }
+
+    private boolean save() {
+        try {
+            provider.saveQuotes(quotes);
+            return true;
+        } catch (Exception e) {
+            e.printStackTrace();
+            return false;
+        }
+    }
+}
+
+package quoteapp;
+
+import javax.swing.*;
+import java.awt.*;
+import java.awt.event.*;
+import java.time.LocalDate;
+import java.util.List;
+
+public class QuoteAppUI extends JFrame {
+    private QuoteService service;
+    private JLabel quoteLabel;
+    private JLabel authorLabel;
+
+    public QuoteAppUI(QuoteService service) {
+        this.service = service;
+        setTitle("Quote of the Day");
+        setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        setSize(600, 250);
+        setLocationRelativeTo(null);
+        initUI();
+    }
+
+    private void initUI() {
+        JPanel p = new JPanel(new BorderLayout(10,10));
+        p.setBorder(BorderFactory.createEmptyBorder(10,10,10,10));
+
+        quoteLabel = new JLabel("<html><i>Loading...</i></html>");
+        quoteLabel.setFont(new Font("Serif", Font.PLAIN, 18));
+        authorLabel = new JLabel("");
+        authorLabel.setFont(new Font("Serif", Font.BOLD, 14));
+        authorLabel.setHorizontalAlignment(SwingConstants.RIGHT);
+
+        JPanel center = new JPanel(new BorderLayout());
+        center.add(quoteLabel, BorderLayout.CENTER);
+        center.add(authorLabel, BorderLayout.SOUTH);
+
+        JPanel buttons = new JPanel();
+        JButton refreshBtn = new JButton("Show Today's Quote");
+        JButton adminBtn = new JButton("Admin");
+
+        refreshBtn.addActionListener(e -> showToday());
+        adminBtn.addActionListener(e -> openAdminDialog());
+
+        buttons.add(refreshBtn);
+        buttons.add(adminBtn);
+
+        p.add(center, BorderLayout.CENTER);
+        p.add(buttons, BorderLayout.SOUTH);
+
+        add(p);
+        showToday();
+    }
+
+    private void showToday() {
+        Quote q = service.getDailyQuote(LocalDate.now());
+        quoteLabel.setText("<html><div style='width:520px;'>" + q.getText() + "</div></html>");
+        authorLabel.setText("— " + q.getAuthor());
+    }
+
+    private void openAdminDialog() {
+        String pwd = JOptionPane.showInputDialog(this, "Enter admin password:");
+        // Simple password check (in real project don't hardcode)
+        if (pwd == null || !pwd.equals("admin123")) {
+            JOptionPane.showMessageDialog(this, "Wrong password or cancelled.", "Access Denied", JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+
+        JDialog dialog = new JDialog(this, "Admin — Manage Quotes", true);
+        dialog.setSize(700, 400);
+        dialog.setLocationRelativeTo(this);
+
+        DefaultListModel<String> model = new DefaultListModel<>();
+        List<Quote> all = service.getAllQuotes();
+        for (Quote q : all) model.addElement(q.getText() + " — " + q.getAuthor());
+
+        JList<String> list = new JList<>(model);
+        JScrollPane scroll = new JScrollPane(list);
+
+        JButton addBtn = new JButton("Add Quote");
+        JButton removeBtn = new JButton("Remove Selected");
+
+        addBtn.addActionListener(e -> {
+            JTextField textField = new JTextField();
+            JTextField authorField = new JTextField();
+            Object[] inputs = {"Quote:", textField, "Author:", authorField};
+            int res = JOptionPane.showConfirmDialog(dialog, inputs, "Add Quote", JOptionPane.OK_CANCEL_OPTION);
+            if (res == JOptionPane.OK_OPTION) {
+                String txt = textField.getText().trim();
+                String auth = authorField.getText().trim();
+                if (!txt.isBlank()) {
+                    boolean ok = service.addQuote(new Quote(txt, auth.isBlank() ? "Unknown" : auth));
+                    if (ok) {
+                        model.addElement(txt + " — " + (auth.isBlank() ? "Unknown" : auth));
+                        JOptionPane.showMessageDialog(dialog, "Added and saved.");
+                    } else {
+                        JOptionPane.showMessageDialog(dialog, "Failed to save.", "Error", JOptionPane.ERROR_MESSAGE);
+                    }
+                }
+            }
+        });
+
+        removeBtn.addActionListener(e -> {
+            int idx = list.getSelectedIndex();
+            if (idx >= 0) {
+                int c = JOptionPane.showConfirmDialog(dialog, "Remove selected quote?", "Confirm", JOptionPane.YES_NO_OPTION);
+                if (c == JOptionPane.YES_OPTION) {
+                    boolean ok = service.removeQuote(idx);
+                    if (ok) {
+                        model.remove(idx);
+                        JOptionPane.showMessageDialog(dialog, "Removed and saved.");
+                    } else {
+                        JOptionPane.showMessageDialog(dialog, "Failed to remove.", "Error", JOptionPane.ERROR_MESSAGE);
+                    }
+                }
+            } else {
+                JOptionPane.showMessageDialog(dialog, "Select a quote first.");
+            }
+        });
+
+        JPanel btnPanel = new JPanel();
+        btnPanel.add(addBtn);
+        btnPanel.add(removeBtn);
+
+        dialog.setLayout(new BorderLayout());
+        dialog.add(scroll, BorderLayout.CENTER);
+        dialog.add(btnPanel, BorderLayout.SOUTH);
+        dialog.setVisible(true);
+        // After closing admin, refresh main display
+        showToday();
+    }
+
+    public static void main(String[] args) {
+        // Use FileQuoteProvider with file "quotes.txt"
+        QuoteProvider provider = new FileQuoteProvider("quotes.txt");
+        QuoteService service = new QuoteService(provider);
+        SwingUtilities.invokeLater(() -> {
+            new QuoteAppUI(service).setVisible(true);
+        });
+    }
+}
